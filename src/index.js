@@ -27,7 +27,7 @@ async function main() {
   const copyEngine = new CopyEngine(positionTracker);
 
   // Set up WebSocket monitor on master account
-  const socket = new TradovateSocket((fill) => copyEngine.onMasterFill(fill));
+  const socket = new TradovateSocket((fill) => copyEngine.onFill(fill));
   await socket.connect();
 
   console.log('[CopyTrader] Running — waiting for master fills...');

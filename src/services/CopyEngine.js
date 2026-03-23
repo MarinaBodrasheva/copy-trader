@@ -13,11 +13,31 @@ export class CopyEngine {
     this.processedFills  = new Set();
   }
 
-  async onMasterFill(fill) {
+  // ── Entry point for ALL fills from the WebSocket ───────────────────────────
+
+  async onFill(fill) {
+    if (fill.accountId === config.masterAccountId) {
+      await this._handleMasterFill(fill);
+    } else if (config.slaveAccountIds.includes(fill.accountId)) {
+      this._handleSlaveFill(fill);
+    }
+  }
+
+  // ── Slave fill: update position from the actual confirmed fill event ────────
+
+  _handleSlaveFill(fill) {
+    const { accountId, contractId, action, qty } = fill;
+    if (!contractId || !action || !qty) return;
+
+    this.positionTracker.applyFill(accountId, contractId, action, qty);
+    console.log(`[CopyEngine] Slave ${accountId} fill confirmed — ${action} ${qty}x ${contractId}`);
+  }
+
+  // ── Master fill: copy to all slaves ────────────────────────────────────────
+
+  async _handleMasterFill(fill) {
     if (this.processedFills.has(fill.orderId)) return;
     this.processedFills.add(fill.orderId);
-
-    if (fill.accountId !== config.masterAccountId) return;
 
     const { contractId, action, qty } = fill;
 
@@ -31,14 +51,12 @@ export class CopyEngine {
     const isClose = this.positionTracker.isClosingFill(config.masterAccountId, contractId, action);
     this.positionTracker.applyFill(config.masterAccountId, contractId, action, qty);
 
-    // Copy to all slaves in parallel
     await Promise.all(
       this.slaveAccountIds.map((accountId) =>
         this._copyToSlave({ accountId, contractId, action, qty, orderId: fill.orderId, isClose })
       )
     );
 
-    // After a close: verify all slaves are actually flat, retry if not
     if (isClose) {
       await this._verifySlavesClosed({ contractId, action, qty, orderId: fill.orderId });
     }
@@ -68,7 +86,8 @@ export class CopyEngine {
 
     try {
       const res = await placeMarketOrder({ accountId, symbol: contractId, action, orderQty: qty });
-      this.positionTracker.applyFill(accountId, contractId, action, qty);
+      // Position state is NOT updated here optimistically.
+      // It will be updated when the actual slave fill event arrives via onFill → _handleSlaveFill.
       console.log(`[CopyEngine] ✓ Slave ${accountId} order placed:`, res.orderId || res);
     } catch (err) {
       const error = err?.response?.data
@@ -83,9 +102,8 @@ export class CopyEngine {
   // ── Post-close verification ─────────────────────────────────────────────────
 
   /**
-   * After master closes, wait briefly then check each slave's actual position
-   * via the API. Any slave still holding the position gets a retry close.
-   * If still open after max retries → critical alert.
+   * After master closes, wait briefly for slave fill events to arrive, then
+   * verify each slave is flat via the API. Retries if not.
    */
   async _verifySlavesClosed({ contractId, action, qty, orderId }) {
     await _sleep(CLOSE_VERIFY_DELAY_MS);
@@ -96,7 +114,7 @@ export class CopyEngine {
   }
 
   async _ensureSlaveClosed({ accountId, contractId, action, qty, orderId, attempt = 1 }) {
-    // Refresh position from the real API
+    // Always verify against the real API — catches missed fill events
     await this.positionTracker.refreshAccount(accountId);
     const liveQty = this.positionTracker.getNetQty(accountId, contractId);
 
@@ -129,16 +147,14 @@ export class CopyEngine {
       return;
     }
 
-    // Retry: place a fresh close order for whatever qty is still open
     console.log(`[CopyEngine] Retrying close for slave ${accountId} (attempt ${attempt})...`);
     try {
       const res = await placeMarketOrder({
         accountId,
         symbol: contractId,
-        action,             // same direction as the original close
+        action,
         orderQty: Math.abs(liveQty),
       });
-      this.positionTracker.applyFill(accountId, contractId, action, Math.abs(liveQty));
       console.log(`[CopyEngine] ✓ Retry close placed for slave ${accountId}:`, res.orderId || res);
     } catch (err) {
       const error = err?.response?.data
@@ -147,7 +163,6 @@ export class CopyEngine {
       console.error(`[CopyEngine] ✗ Retry close failed for slave ${accountId}:`, error);
     }
 
-    // Wait and check again
     await _sleep(CLOSE_VERIFY_DELAY_MS);
     await this._ensureSlaveClosed({ accountId, contractId, action, qty, orderId, attempt: attempt + 1 });
   }

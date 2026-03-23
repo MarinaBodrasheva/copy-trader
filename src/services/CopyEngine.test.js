@@ -41,10 +41,31 @@ describe('CopyEngine', () => {
     vi.useRealTimers();
   });
 
-  // ── Basic copy ─────────────────────────────────────────────────────────────
+  // ── Slave fill events ──────────────────────────────────────────────────────
+
+  it('updates position tracker when a slave fill event arrives', async () => {
+    await engine.onFill(makeFill({ accountId: SLAVE }));
+
+    expect(tracker.applyFill).toHaveBeenCalledWith(SLAVE, 'ESM4', 'Buy', 2);
+  });
+
+  it('ignores slave fill events with missing fields', async () => {
+    await engine.onFill({ accountId: SLAVE, contractId: null, action: null, qty: null });
+
+    expect(tracker.applyFill).not.toHaveBeenCalled();
+  });
+
+  it('ignores fill events from unrecognised accounts', async () => {
+    await engine.onFill(makeFill({ accountId: 99 }));
+
+    expect(placeMarketOrder).not.toHaveBeenCalled();
+    expect(tracker.applyFill).not.toHaveBeenCalled();
+  });
+
+  // ── Master fill: basic copy ────────────────────────────────────────────────
 
   it('places a market order on the slave for each master fill', async () => {
-    await engine.onMasterFill(makeFill());
+    await engine.onFill(makeFill());
 
     expect(placeMarketOrder).toHaveBeenCalledOnce();
     expect(placeMarketOrder).toHaveBeenCalledWith({
@@ -52,34 +73,29 @@ describe('CopyEngine', () => {
     });
   });
 
-  it('updates the slave position tracker after a successful order', async () => {
-    await engine.onMasterFill(makeFill());
-
-    expect(tracker.applyFill).toHaveBeenCalledWith(SLAVE, 'ESM4', 'Buy', 2);
-  });
-
-  it('updates the master position tracker on every fill', async () => {
-    await engine.onMasterFill(makeFill());
+  it('updates the master position tracker on every master fill', async () => {
+    await engine.onFill(makeFill());
 
     expect(tracker.applyFill).toHaveBeenCalledWith(MASTER, 'ESM4', 'Buy', 2);
   });
 
-  it('ignores fills from non-master accounts', async () => {
-    await engine.onMasterFill(makeFill({ accountId: 99 }));
+  it('does NOT optimistically update slave position after order placement', async () => {
+    await engine.onFill(makeFill());
 
-    expect(placeMarketOrder).not.toHaveBeenCalled();
+    // Slave position must only be updated via an actual fill event, not order placement
+    expect(tracker.applyFill).not.toHaveBeenCalledWith(SLAVE, 'ESM4', 'Buy', 2);
   });
 
-  it('deduplicates fills with the same orderId', async () => {
+  it('deduplicates master fills with the same orderId', async () => {
     const fill = makeFill();
-    await engine.onMasterFill(fill);
-    await engine.onMasterFill(fill);
+    await engine.onFill(fill);
+    await engine.onFill(fill);
 
     expect(placeMarketOrder).toHaveBeenCalledOnce();
   });
 
-  it('skips fill with missing fields without throwing', async () => {
-    await engine.onMasterFill({ orderId: 'x', accountId: MASTER, contractId: null, action: null, qty: null });
+  it('skips master fill with missing fields without throwing', async () => {
+    await engine.onFill({ orderId: 'x', accountId: MASTER, contractId: null, action: null, qty: null });
 
     expect(placeMarketOrder).not.toHaveBeenCalled();
   });
@@ -89,20 +105,10 @@ describe('CopyEngine', () => {
   it('logs and alerts when placeMarketOrder rejects', async () => {
     placeMarketOrder.mockRejectedValue(new Error('API error'));
 
-    await engine.onMasterFill(makeFill());
+    await engine.onFill(makeFill());
 
     expect(logFailure).toHaveBeenCalledOnce();
     expect(alertCopyFailure).toHaveBeenCalledOnce();
-  });
-
-  it('does not update slave position tracker when order fails', async () => {
-    placeMarketOrder.mockRejectedValue(new Error('API error'));
-
-    await engine.onMasterFill(makeFill());
-
-    // master fill must be tracked; slave must NOT be tracked on failure
-    expect(tracker.applyFill).toHaveBeenCalledWith(MASTER, 'ESM4', 'Buy', 2);
-    expect(tracker.applyFill).not.toHaveBeenCalledWith(SLAVE, 'ESM4', 'Buy', 2);
   });
 
   // ── Close guard ────────────────────────────────────────────────────────────
@@ -111,10 +117,10 @@ describe('CopyEngine', () => {
     vi.useFakeTimers();
     tracker.isClosingFill.mockReturnValue(true);
     tracker.getNetQty
-      .mockReturnValueOnce(2)   // close guard in _copyToSlave: has position → proceed
+      .mockReturnValueOnce(2)   // close guard: slave has position → proceed
       .mockReturnValueOnce(0);  // post-close verify: slave is flat
 
-    const promise = engine.onMasterFill(makeFill({ action: 'Sell' }));
+    const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000);
     await promise;
 
@@ -126,7 +132,7 @@ describe('CopyEngine', () => {
     tracker.isClosingFill.mockReturnValue(true);
     tracker.getNetQty.mockReturnValue(0); // slave is flat for all calls
 
-    const promise = engine.onMasterFill(makeFill({ action: 'Sell' }));
+    const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000);
     await promise;
 
@@ -142,7 +148,7 @@ describe('CopyEngine', () => {
   it('does not run post-close verification for open fills', async () => {
     tracker.isClosingFill.mockReturnValue(false);
 
-    await engine.onMasterFill(makeFill({ action: 'Buy' }));
+    await engine.onFill(makeFill({ action: 'Buy' }));
 
     expect(tracker.refreshAccount).not.toHaveBeenCalled();
   });
@@ -154,12 +160,12 @@ describe('CopyEngine', () => {
       .mockReturnValueOnce(2)   // close guard
       .mockReturnValueOnce(0);  // verify: slave is flat
 
-    const promise = engine.onMasterFill(makeFill({ action: 'Sell' }));
+    const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000);
     await promise;
 
     expect(tracker.refreshAccount).toHaveBeenCalledWith(SLAVE);
-    expect(placeMarketOrder).toHaveBeenCalledOnce(); // initial only, no retry
+    expect(placeMarketOrder).toHaveBeenCalledOnce(); // no retry
     expect(sendAlert).not.toHaveBeenCalled();
   });
 
@@ -171,7 +177,7 @@ describe('CopyEngine', () => {
       .mockReturnValueOnce(2)   // verify attempt 1: still open → retry
       .mockReturnValueOnce(0);  // verify attempt 2: flat → done
 
-    const promise = engine.onMasterFill(makeFill({ action: 'Sell' }));
+    const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000); // initial verify delay
     await vi.advanceTimersByTimeAsync(3000); // delay after retry 1
     await promise;
@@ -187,7 +193,7 @@ describe('CopyEngine', () => {
       .mockReturnValueOnce(2)  // close guard
       .mockReturnValue(2);     // always open in every verify attempt
 
-    const promise = engine.onMasterFill(makeFill({ action: 'Sell' }));
+    const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000); // initial delay  → attempt 1 (retry)
     await vi.advanceTimersByTimeAsync(3000); // after retry 1  → attempt 2 (retry)
     await vi.advanceTimersByTimeAsync(3000); // after retry 2  → attempt 3 (critical)
