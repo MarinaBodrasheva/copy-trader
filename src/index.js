@@ -1,6 +1,7 @@
 import { authenticate } from './api/tradovate.js';
 import { TradovateSocket } from './ws/TradovateSocket.js';
 import { CopyEngine } from './services/CopyEngine.js';
+import { PositionTracker } from './services/PositionTracker.js';
 import { config } from './config/index.js';
 
 async function main() {
@@ -18,8 +19,12 @@ async function main() {
   // Initial authentication
   await authenticate();
 
+  // Load current positions for all accounts (prevents reverse-trade on close)
+  const positionTracker = new PositionTracker();
+  await positionTracker.initialize();
+
   // Set up copy engine
-  const copyEngine = new CopyEngine();
+  const copyEngine = new CopyEngine(positionTracker);
 
   // Set up WebSocket monitor on master account
   const socket = new TradovateSocket((fill) => copyEngine.onMasterFill(fill));

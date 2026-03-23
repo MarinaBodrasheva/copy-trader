@@ -59,3 +59,12 @@ export async function getAccounts() {
   });
   return res.data;
 }
+
+export async function getPositions(accountId) {
+  const token = await getToken();
+  const res = await axios.get(`${config.restBase}/position/list`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  // Tradovate returns all positions for the user — filter to the requested account
+  return (res.data || []).filter((p) => p.accountId === accountId);
+}
