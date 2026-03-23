@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { FailureLogEntry } from '../types.js';
+import type { FailureLogEntry } from '../src/types.js';
 
 const appendFileMock = vi.hoisted(() => vi.fn());
 
@@ -11,7 +11,7 @@ vi.mock('fs', () => ({
   },
 }));
 
-import { logFailure } from './FailureLogger.js';
+import { logFailure } from '../src/services/FailureLogger.js';
 
 const SAMPLE: FailureLogEntry = {
   slaveAccountId: 2,

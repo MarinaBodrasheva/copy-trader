@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('axios', () => ({ default: { post: vi.fn() } }));
-vi.mock('../config/index.js', () => ({
+vi.mock('../src/config/index.js', () => ({
   config: { telegram: { botToken: 'test-token', chatId: '99999' } },
 }));
 
-import { sendAlert, alertCopyFailure } from './Alerter.js';
+import { sendAlert, alertCopyFailure } from '../src/services/Alerter.js';
 import axios from 'axios';
-import { config } from '../config/index.js';
+import { config } from '../src/config/index.js';
 
 describe('Alerter', () => {
   beforeEach(() => {

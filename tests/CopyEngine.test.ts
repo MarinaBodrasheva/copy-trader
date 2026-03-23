@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { IPositionTracker, Fill } from '../types.js';
+import type { IPositionTracker, Fill } from '../src/types.js';
 
-vi.mock('../api/tradovate.js', () => ({ placeMarketOrder: vi.fn() }));
-vi.mock('./FailureLogger.js',  () => ({ logFailure: vi.fn() }));
-vi.mock('./Alerter.js',        () => ({ alertCopyFailure: vi.fn(), sendAlert: vi.fn() }));
-vi.mock('../config/index.js',  () => ({ config: { masterAccountId: 1, slaveAccountIds: [2] } }));
+vi.mock('../src/api/tradovate.js', () => ({ placeMarketOrder: vi.fn() }));
+vi.mock('../src/services/FailureLogger.js',  () => ({ logFailure: vi.fn() }));
+vi.mock('../src/services/Alerter.js',        () => ({ alertCopyFailure: vi.fn(), sendAlert: vi.fn() }));
+vi.mock('../src/config/index.js',  () => ({ config: { masterAccountId: 1, slaveAccountIds: [2] } }));
 
-import { CopyEngine } from './CopyEngine.js';
-import { placeMarketOrder } from '../api/tradovate.js';
-import { logFailure } from './FailureLogger.js';
-import { alertCopyFailure, sendAlert } from './Alerter.js';
+import { CopyEngine } from '../src/services/CopyEngine.js';
+import { placeMarketOrder } from '../src/api/tradovate.js';
+import { logFailure } from '../src/services/FailureLogger.js';
+import { alertCopyFailure, sendAlert } from '../src/services/Alerter.js';
 
 const MASTER = 1;
 const SLAVE  = 2;

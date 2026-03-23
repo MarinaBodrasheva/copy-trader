@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../api/tradovate.js', () => ({ getPositions: vi.fn() }));
-vi.mock('./Alerter.js',        () => ({ sendAlert: vi.fn() }));
-vi.mock('../config/index.js',  () => ({ config: { masterAccountId: 1, slaveAccountIds: [2] } }));
+vi.mock('../src/api/tradovate.js', () => ({ getPositions: vi.fn() }));
+vi.mock('../src/services/Alerter.js',        () => ({ sendAlert: vi.fn() }));
+vi.mock('../src/config/index.js',  () => ({ config: { masterAccountId: 1, slaveAccountIds: [2] } }));
 
-import { PositionTracker } from './PositionTracker.js';
-import { getPositions } from '../api/tradovate.js';
-import { sendAlert } from './Alerter.js';
-import type { Position } from '../types.js';
+import { PositionTracker } from '../src/services/PositionTracker.js';
+import { getPositions } from '../src/api/tradovate.js';
+import { sendAlert } from '../src/services/Alerter.js';
+import type { Position } from '../src/types.js';
 
 function pos(contractId: string, netPos: number, accountId = 1): Position {
   return { contractId, netPos, accountId };
