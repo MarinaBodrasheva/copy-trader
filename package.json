@@ -1,0 +1,16 @@
+{
+  "name": "copy-trader",
+  "version": "1.0.0",
+  "description": "Copy trades from master to slave Tradovate accounts",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  }
+}
