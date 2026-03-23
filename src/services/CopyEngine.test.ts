@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { IPositionTracker, Fill } from '../types.js';
 
 vi.mock('../api/tradovate.js', () => ({ placeMarketOrder: vi.fn() }));
 vi.mock('./FailureLogger.js',  () => ({ logFailure: vi.fn() }));
@@ -13,26 +14,29 @@ import { alertCopyFailure, sendAlert } from './Alerter.js';
 const MASTER = 1;
 const SLAVE  = 2;
 
-function makeFill(overrides = {}) {
-  return { orderId: 'ord-1', accountId: MASTER, contractId: 'ESM4', action: 'Buy', qty: 2, ...overrides };
+function makeFill(overrides: Partial<Fill> = {}): Fill {
+  return { orderId: 1, accountId: MASTER, contractId: 'ESM4', action: 'Buy', qty: 2, ...overrides };
 }
 
-function makeTracker(overrides = {}) {
+function makeTracker(overrides: Partial<IPositionTracker> = {}): IPositionTracker {
   return {
+    initialize:     vi.fn().mockResolvedValue(undefined),
     isClosingFill:  vi.fn().mockReturnValue(false),
     applyFill:      vi.fn(),
     getNetQty:      vi.fn().mockReturnValue(2),
     refreshAccount: vi.fn().mockResolvedValue(undefined),
+    reconcile:      vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
 
 describe('CopyEngine', () => {
-  let engine, tracker;
+  let engine:  CopyEngine;
+  let tracker: IPositionTracker;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    placeMarketOrder.mockResolvedValue({ orderId: 'placed-1' });
+    vi.mocked(placeMarketOrder).mockResolvedValue({ orderId: 'placed-1' });
     tracker = makeTracker();
     engine  = new CopyEngine(tracker);
   });
@@ -50,7 +54,7 @@ describe('CopyEngine', () => {
   });
 
   it('ignores slave fill events with missing fields', async () => {
-    await engine.onFill({ accountId: SLAVE, contractId: null, action: null, qty: null });
+    await engine.onFill({ orderId: 1, accountId: SLAVE, contractId: '', action: 'Buy', qty: 0 });
 
     expect(tracker.applyFill).not.toHaveBeenCalled();
   });
@@ -82,7 +86,6 @@ describe('CopyEngine', () => {
   it('does NOT optimistically update slave position after order placement', async () => {
     await engine.onFill(makeFill());
 
-    // Slave position must only be updated via an actual fill event, not order placement
     expect(tracker.applyFill).not.toHaveBeenCalledWith(SLAVE, 'ESM4', 'Buy', 2);
   });
 
@@ -95,7 +98,7 @@ describe('CopyEngine', () => {
   });
 
   it('skips master fill with missing fields without throwing', async () => {
-    await engine.onFill({ orderId: 'x', accountId: MASTER, contractId: null, action: null, qty: null });
+    await engine.onFill({ orderId: 2, accountId: MASTER, contractId: '', action: 'Buy', qty: 0 });
 
     expect(placeMarketOrder).not.toHaveBeenCalled();
   });
@@ -103,7 +106,7 @@ describe('CopyEngine', () => {
   // ── Failure handling ───────────────────────────────────────────────────────
 
   it('logs and alerts when placeMarketOrder rejects', async () => {
-    placeMarketOrder.mockRejectedValue(new Error('API error'));
+    vi.mocked(placeMarketOrder).mockRejectedValue(new Error('API error'));
 
     await engine.onFill(makeFill());
 
@@ -115,10 +118,10 @@ describe('CopyEngine', () => {
 
   it('copies close to slave that has an open position', async () => {
     vi.useFakeTimers();
-    tracker.isClosingFill.mockReturnValue(true);
-    tracker.getNetQty
-      .mockReturnValueOnce(2)   // close guard: slave has position → proceed
-      .mockReturnValueOnce(0);  // post-close verify: slave is flat
+    vi.mocked(tracker.isClosingFill).mockReturnValue(true);
+    vi.mocked(tracker.getNetQty)
+      .mockReturnValueOnce(2)   // close guard: has position
+      .mockReturnValueOnce(0);  // verify: flat
 
     const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000);
@@ -129,8 +132,8 @@ describe('CopyEngine', () => {
 
   it('skips close and alerts when slave has no open position (prevents reverse trade)', async () => {
     vi.useFakeTimers();
-    tracker.isClosingFill.mockReturnValue(true);
-    tracker.getNetQty.mockReturnValue(0); // slave is flat for all calls
+    vi.mocked(tracker.isClosingFill).mockReturnValue(true);
+    vi.mocked(tracker.getNetQty).mockReturnValue(0);
 
     const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000);
@@ -139,14 +142,14 @@ describe('CopyEngine', () => {
     expect(placeMarketOrder).not.toHaveBeenCalled();
     expect(logFailure).toHaveBeenCalledOnce();
     expect(alertCopyFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ slaveAccountId: SLAVE, contractId: 'ESM4' })
+      expect.objectContaining({ slaveAccountId: SLAVE, contractId: 'ESM4' }),
     );
   });
 
   // ── Post-close verification ────────────────────────────────────────────────
 
   it('does not run post-close verification for open fills', async () => {
-    tracker.isClosingFill.mockReturnValue(false);
+    vi.mocked(tracker.isClosingFill).mockReturnValue(false);
 
     await engine.onFill(makeFill({ action: 'Buy' }));
 
@@ -155,48 +158,48 @@ describe('CopyEngine', () => {
 
   it('confirms slave is flat after close — no retry needed', async () => {
     vi.useFakeTimers();
-    tracker.isClosingFill.mockReturnValue(true);
-    tracker.getNetQty
-      .mockReturnValueOnce(2)   // close guard
-      .mockReturnValueOnce(0);  // verify: slave is flat
+    vi.mocked(tracker.isClosingFill).mockReturnValue(true);
+    vi.mocked(tracker.getNetQty)
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(0);
 
     const promise = engine.onFill(makeFill({ action: 'Sell' }));
     await vi.advanceTimersByTimeAsync(3000);
     await promise;
 
     expect(tracker.refreshAccount).toHaveBeenCalledWith(SLAVE);
-    expect(placeMarketOrder).toHaveBeenCalledOnce(); // no retry
+    expect(placeMarketOrder).toHaveBeenCalledOnce();
     expect(sendAlert).not.toHaveBeenCalled();
   });
 
   it('retries close once when slave still has position after initial attempt', async () => {
     vi.useFakeTimers();
-    tracker.isClosingFill.mockReturnValue(true);
-    tracker.getNetQty
-      .mockReturnValueOnce(2)   // close guard
-      .mockReturnValueOnce(2)   // verify attempt 1: still open → retry
-      .mockReturnValueOnce(0);  // verify attempt 2: flat → done
+    vi.mocked(tracker.isClosingFill).mockReturnValue(true);
+    vi.mocked(tracker.getNetQty)
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(0);
 
     const promise = engine.onFill(makeFill({ action: 'Sell' }));
-    await vi.advanceTimersByTimeAsync(3000); // initial verify delay
-    await vi.advanceTimersByTimeAsync(3000); // delay after retry 1
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
     await promise;
 
-    expect(placeMarketOrder).toHaveBeenCalledTimes(2); // initial + 1 retry
+    expect(placeMarketOrder).toHaveBeenCalledTimes(2);
     expect(sendAlert).not.toHaveBeenCalled();
   });
 
   it('sends critical alert after max retries with slave still open', async () => {
     vi.useFakeTimers();
-    tracker.isClosingFill.mockReturnValue(true);
-    tracker.getNetQty
-      .mockReturnValueOnce(2)  // close guard
-      .mockReturnValue(2);     // always open in every verify attempt
+    vi.mocked(tracker.isClosingFill).mockReturnValue(true);
+    vi.mocked(tracker.getNetQty)
+      .mockReturnValueOnce(2)
+      .mockReturnValue(2);
 
     const promise = engine.onFill(makeFill({ action: 'Sell' }));
-    await vi.advanceTimersByTimeAsync(3000); // initial delay  → attempt 1 (retry)
-    await vi.advanceTimersByTimeAsync(3000); // after retry 1  → attempt 2 (retry)
-    await vi.advanceTimersByTimeAsync(3000); // after retry 2  → attempt 3 (critical)
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
     await promise;
 
     expect(sendAlert).toHaveBeenCalledOnce();

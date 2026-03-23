@@ -12,8 +12,7 @@ import { config } from '../config/index.js';
 describe('Alerter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    axios.post.mockResolvedValue({ data: { ok: true } });
-    // Reset to valid credentials before each test
+    vi.mocked(axios.post).mockResolvedValue({ data: { ok: true } });
     config.telegram.botToken = 'test-token';
     config.telegram.chatId   = '99999';
   });
@@ -24,7 +23,7 @@ describe('Alerter', () => {
     await sendAlert('hello');
 
     expect(axios.post).toHaveBeenCalledOnce();
-    expect(axios.post.mock.calls[0][0]).toContain('test-token/sendMessage');
+    expect(vi.mocked(axios.post).mock.calls[0][0]).toContain('test-token/sendMessage');
   });
 
   it('sends the message text and chat_id in the request body', async () => {
@@ -32,7 +31,7 @@ describe('Alerter', () => {
 
     expect(axios.post).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ chat_id: '99999', text: 'hello' })
+      expect.objectContaining({ chat_id: '99999', text: 'hello' }),
     );
   });
 
@@ -53,7 +52,7 @@ describe('Alerter', () => {
   });
 
   it('does not throw when the Telegram API request fails', async () => {
-    axios.post.mockRejectedValue(new Error('Network error'));
+    vi.mocked(axios.post).mockRejectedValue(new Error('Network error'));
 
     await expect(sendAlert('hello')).resolves.toBeUndefined();
   });
@@ -69,7 +68,7 @@ describe('Alerter', () => {
       error:          'Margin exceeded',
     });
 
-    const [, body] = axios.post.mock.calls[0];
+    const [, body] = vi.mocked(axios.post).mock.calls[0] as [string, { text: string }];
     expect(body.text).toContain('42');
     expect(body.text).toContain('NQM4');
     expect(body.text).toContain('Buy');

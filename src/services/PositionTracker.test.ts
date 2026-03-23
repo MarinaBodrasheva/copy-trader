@@ -7,9 +7,14 @@ vi.mock('../config/index.js',  () => ({ config: { masterAccountId: 1, slaveAccou
 import { PositionTracker } from './PositionTracker.js';
 import { getPositions } from '../api/tradovate.js';
 import { sendAlert } from './Alerter.js';
+import type { Position } from '../types.js';
+
+function pos(contractId: string, netPos: number, accountId = 1): Position {
+  return { contractId, netPos, accountId };
+}
 
 describe('PositionTracker', () => {
-  let tracker;
+  let tracker: PositionTracker;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -96,12 +101,12 @@ describe('PositionTracker', () => {
   // ── initialize ─────────────────────────────────────────────────────────────
 
   it('loads positions from API for master and all slave accounts', async () => {
-    vi.useFakeTimers(); // prevent reconcile interval from running
-    getPositions.mockResolvedValue([{ contractId: 'ESM4', netPos: 3 }]);
+    vi.useFakeTimers();
+    vi.mocked(getPositions).mockResolvedValue([pos('ESM4', 3)]);
 
     await tracker.initialize();
 
-    expect(getPositions).toHaveBeenCalledTimes(2); // master (1) + slave (2)
+    expect(getPositions).toHaveBeenCalledTimes(2);
     expect(tracker.getNetQty(1, 'ESM4')).toBe(3);
     expect(tracker.getNetQty(2, 'ESM4')).toBe(3);
   });
@@ -110,9 +115,9 @@ describe('PositionTracker', () => {
 
   describe('reconcile', () => {
     it('sends alert when slave position differs from master', async () => {
-      getPositions
-        .mockResolvedValueOnce([{ contractId: 'ESM4', netPos: 2 }])  // master
-        .mockResolvedValueOnce([{ contractId: 'ESM4', netPos: 1 }]); // slave — mismatch
+      vi.mocked(getPositions)
+        .mockResolvedValueOnce([pos('ESM4', 2)])
+        .mockResolvedValueOnce([pos('ESM4', 1, 2)]);
 
       await tracker.reconcile();
 
@@ -121,9 +126,9 @@ describe('PositionTracker', () => {
     });
 
     it('does not alert when positions match', async () => {
-      getPositions
-        .mockResolvedValueOnce([{ contractId: 'ESM4', netPos: 2 }])
-        .mockResolvedValueOnce([{ contractId: 'ESM4', netPos: 2 }]);
+      vi.mocked(getPositions)
+        .mockResolvedValueOnce([pos('ESM4', 2)])
+        .mockResolvedValueOnce([pos('ESM4', 2, 2)]);
 
       await tracker.reconcile();
 
@@ -131,9 +136,9 @@ describe('PositionTracker', () => {
     });
 
     it('alerts when slave is flat but master has an open position', async () => {
-      getPositions
-        .mockResolvedValueOnce([{ contractId: 'ESM4', netPos: 2 }]) // master open
-        .mockResolvedValueOnce([]);                                   // slave flat
+      vi.mocked(getPositions)
+        .mockResolvedValueOnce([pos('ESM4', 2)])
+        .mockResolvedValueOnce([]);
 
       await tracker.reconcile();
 
@@ -141,9 +146,9 @@ describe('PositionTracker', () => {
     });
 
     it('alerts when master is flat but slave still has a position', async () => {
-      getPositions
-        .mockResolvedValueOnce([])                                    // master flat
-        .mockResolvedValueOnce([{ contractId: 'ESM4', netPos: 2 }]); // slave open
+      vi.mocked(getPositions)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([pos('ESM4', 2, 2)]);
 
       await tracker.reconcile();
 
@@ -151,7 +156,7 @@ describe('PositionTracker', () => {
     });
 
     it('does not alert when both master and slave are flat', async () => {
-      getPositions
+      vi.mocked(getPositions)
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([]);
 
@@ -164,7 +169,7 @@ describe('PositionTracker', () => {
   // ── refreshAccount ─────────────────────────────────────────────────────────
 
   it('updates local position state from API on refresh', async () => {
-    getPositions.mockResolvedValue([{ contractId: 'ESM4', netPos: 5 }]);
+    vi.mocked(getPositions).mockResolvedValue([pos('ESM4', 5)]);
 
     await tracker.refreshAccount(1);
 
@@ -172,8 +177,8 @@ describe('PositionTracker', () => {
   });
 
   it('clears stale local positions when API reports account is flat', async () => {
-    tracker.applyFill(1, 'ESM4', 'Buy', 2); // seed some local state
-    getPositions.mockResolvedValue([]);       // API says flat
+    tracker.applyFill(1, 'ESM4', 'Buy', 2);
+    vi.mocked(getPositions).mockResolvedValue([]);
 
     await tracker.refreshAccount(1);
 

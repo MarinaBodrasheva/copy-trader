@@ -5,3 +5,4 @@ logs/
 .DS_Store
 package-lock.json
 .claude/
+dist/

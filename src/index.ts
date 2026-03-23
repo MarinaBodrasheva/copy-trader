@@ -4,7 +4,7 @@ import { CopyEngine } from './services/CopyEngine.js';
 import { PositionTracker } from './services/PositionTracker.js';
 import { config } from './config/index.js';
 
-async function main() {
+async function main(): Promise<void> {
   console.log(`[CopyTrader] Starting in ${config.env.toUpperCase()} mode`);
   console.log(`[CopyTrader] Master account: ${config.masterAccountId}`);
   console.log(`[CopyTrader] Slave accounts: ${config.slaveAccountIds.join(', ')}`);
@@ -16,24 +16,20 @@ async function main() {
     throw new Error('SLAVE_ACCOUNT_IDS is not set in .env');
   }
 
-  // Initial authentication
   await authenticate();
 
-  // Load current positions for all accounts (prevents reverse-trade on close)
   const positionTracker = new PositionTracker();
   await positionTracker.initialize();
 
-  // Set up copy engine
   const copyEngine = new CopyEngine(positionTracker);
+  const socket     = new TradovateSocket(fill => copyEngine.onFill(fill));
 
-  // Set up WebSocket monitor on master account
-  const socket = new TradovateSocket((fill) => copyEngine.onFill(fill));
   await socket.connect();
 
   console.log('[CopyTrader] Running — waiting for master fills...');
 }
 
-main().catch((err) => {
-  console.error('[CopyTrader] Fatal error:', err.message);
+main().catch(err => {
+  console.error('[CopyTrader] Fatal error:', (err as Error).message);
   process.exit(1);
 });

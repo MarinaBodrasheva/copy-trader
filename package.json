@@ -2,11 +2,12 @@
   "name": "copy-trader",
   "version": "1.0.0",
   "description": "Copy trades from master to slave Tradovate accounts",
-  "main": "src/index.js",
+  "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -16,6 +17,10 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
     "vitest": "^2.1.9"
   }
 }
