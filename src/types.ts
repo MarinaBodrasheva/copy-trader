@@ -48,11 +48,32 @@ export interface FailureLogEntry {
   error:          string;
 }
 
+// ── Tradovate account info ─────────────────────────────────────────────────
+
+export interface AccountInfo {
+  id:   AccountId;
+  name: string;
+}
+
 // ── Tradovate cash balance snapshot ────────────────────────────────────────
 
 export interface CashBalance {
-  accountId:    AccountId;
-  realizedPnl:  number;
+  accountId:   AccountId;
+  amount:      number;   // current cash balance
+  realizedPnl: number;   // today's realized P&L
+  openPnL?:    number;   // unrealized P&L on open positions (if provided by API)
+}
+
+// ── Dashboard account summary ──────────────────────────────────────────────
+
+export interface AccountSummary {
+  accountId:   AccountId;
+  name:        string;
+  role:        'master' | 'slave';
+  balance:     number;
+  realizedPnl: number;
+  openPnL:     number | null;
+  isLocked:    boolean;
 }
 
 // ── PositionTracker interface (for dependency injection / mocking) ──────────

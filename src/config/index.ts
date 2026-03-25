@@ -24,6 +24,7 @@ export interface AppConfig {
   slaveAccountIds: AccountId[];
   telegram:        TelegramConfig;
   maxDailyLossUsd: number;
+  webPort:         number;
 }
 
 const env = process.env.TRADOVATE_ENV ?? 'demo';
@@ -58,4 +59,6 @@ export const config: AppConfig = {
 
   // Set to 0 to disable the daily loss guard
   maxDailyLossUsd: Number(process.env.MAX_DAILY_LOSS_USD ?? 0),
+
+  webPort: Number(process.env.WEB_PORT ?? 3000),
 };

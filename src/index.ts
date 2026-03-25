@@ -3,6 +3,7 @@ import { TradovateSocket } from './ws/TradovateSocket.js';
 import { CopyEngine } from './services/CopyEngine.js';
 import { PositionTracker } from './services/PositionTracker.js';
 import { DailyLossGuard } from './services/DailyLossGuard.js';
+import { startDashboard } from './web/server.js';
 import { config } from './config/index.js';
 
 async function main(): Promise<void> {
@@ -28,6 +29,8 @@ async function main(): Promise<void> {
     dailyLossGuard = new DailyLossGuard(config.slaveAccountIds, config.maxDailyLossUsd);
     await dailyLossGuard.initialize();
   }
+
+  startDashboard(config.webPort, dailyLossGuard);
 
   const copyEngine = new CopyEngine(positionTracker, dailyLossGuard);
   const socket     = new TradovateSocket(fill => copyEngine.onFill(fill));

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Copy Trader Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+
+    h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: 0.02em; }
+
+    #status {
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+
+    #status.ok::before  { content: '● '; color: #22c55e; }
+    #status.err::before { content: '● '; color: #ef4444; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+
+    thead tr {
+      background: #1e2330;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      color: #64748b;
+    }
+
+    th, td {
+      padding: 0.85rem 1.1rem;
+      text-align: left;
+      border-bottom: 1px solid #1e2330;
+    }
+
+    tbody tr:hover { background: #1a1f2e; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .badge-master { background: #1d4ed8; color: #bfdbfe; }
+    .badge-slave  { background: #1e293b; color: #94a3b8; }
+    .badge-locked { background: #7f1d1d; color: #fca5a5; margin-left: 0.4rem; }
+
+    .pos { color: #22c55e; }
+    .neg { color: #ef4444; }
+    .neu { color: #64748b; }
+
+    .na { color: #334155; font-style: italic; }
+
+    .btn-flatten {
+      padding: 0.3rem 0.75rem;
+      background: #1e293b;
+      color: #f87171;
+      border: 1px solid #7f1d1d;
+      border-radius: 0.375rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-flatten:hover:not(:disabled) { background: #7f1d1d; color: #fff; }
+    .btn-flatten:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #error-msg {
+      display: none;
+      margin-top: 1.5rem;
+      padding: 1rem;
+      background: #1f0a0a;
+      border: 1px solid #7f1d1d;
+      border-radius: 0.5rem;
+      color: #fca5a5;
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Copy Trader Dashboard</h1>
+    <span id="status">Loading…</span>
+  </header>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Account</th>
+        <th>Role</th>
+        <th>Balance</th>
+        <th>Day Realized P&amp;L</th>
+        <th>Open P&amp;L</th>
+        <th>Total Day P&amp;L</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <div id="error-msg"></div>
+
+  <script>
+    const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+
+    function fmt(val) {
+      if (val === null || val === undefined) return '<span class="na">—</span>';
+      const s = USD.format(val);
+      if (val > 0) return `<span class="pos">+${s}</span>`;
+      if (val < 0) return `<span class="neg">${s}</span>`;
+      return `<span class="neu">${s}</span>`;
+    }
+
+    function fmtBalance(val) {
+      return `<span>${USD.format(val)}</span>`;
+    }
+
+    function renderRow(a) {
+      const roleBadge = `<span class="badge badge-${a.role}">${a.role}</span>`;
+      const lockedBadge = a.isLocked ? '<span class="badge badge-locked">⛔ locked</span>' : '';
+
+      const totalDay = (a.openPnL !== null)
+        ? a.realizedPnl + a.openPnL
+        : null;
+
+      return `
+        <tr id="row-${a.accountId}">
+          <td><strong>${a.name}</strong> <span style="color:#475569;font-size:0.8rem">#${a.accountId}</span></td>
+          <td>${roleBadge}${lockedBadge}</td>
+          <td>${fmtBalance(a.balance)}</td>
+          <td>${fmt(a.realizedPnl)}</td>
+          <td>${fmt(a.openPnL)}</td>
+          <td>${fmt(totalDay)}</td>
+          <td><button class="btn-flatten" onclick="flatten(${a.accountId}, this)">Flatten</button></td>
+        </tr>`;
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch('/api/accounts');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const accounts = await res.json();
+
+        document.getElementById('tbody').innerHTML = accounts.map(renderRow).join('');
+        document.getElementById('status').textContent = 'Updated ' + new Date().toLocaleTimeString();
+        document.getElementById('status').className = 'ok';
+        document.getElementById('error-msg').style.display = 'none';
+      } catch (err) {
+        document.getElementById('status').textContent = 'Error';
+        document.getElementById('status').className = 'err';
+        const el = document.getElementById('error-msg');
+        el.textContent = 'Failed to load data: ' + err.message;
+        el.style.display = 'block';
+      }
+    }
+
+    async function flatten(accountId, btn) {
+      if (!confirm(`Flatten ALL open positions on account #${accountId}?`)) return;
+      btn.disabled = true;
+      btn.textContent = 'Flattening…';
+      try {
+        const res = await fetch(`/api/flatten/${accountId}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        btn.textContent = data.closed === 0 ? 'No positions' : `Closed ${data.closed}`;
+        setTimeout(() => { btn.textContent = 'Flatten'; btn.disabled = false; }, 3000);
+        refresh(); // immediate refresh after flatten
+      } catch (err) {
+        btn.textContent = 'Error';
+        btn.style.borderColor = '#ef4444';
+        setTimeout(() => { btn.textContent = 'Flatten'; btn.disabled = false; btn.style.borderColor = ''; }, 3000);
+        console.error('Flatten failed:', err.message);
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

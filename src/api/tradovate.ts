@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { config } from '../config/index.js';
-import type { AccountId, CashBalance, PlaceOrderParams, PlaceOrderResponse, Position } from '../types.js';
+import type { AccountId, AccountInfo, CashBalance, PlaceOrderParams, PlaceOrderResponse, Position } from '../types.js';
 
 let accessToken: string | null = null;
 let tokenExpiry: number | null = null;
@@ -55,12 +55,12 @@ export async function placeMarketOrder(params: PlaceOrderParams): Promise<PlaceO
   return res.data;
 }
 
-export async function getAccounts(): Promise<unknown[]> {
+export async function getAccountList(): Promise<AccountInfo[]> {
   const token = await getToken();
-  const res = await axios.get<unknown[]>(`${config.restBase}/account/list`, {
+  const res = await axios.get<AccountInfo[]>(`${config.restBase}/account/list`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  return res.data;
+  return res.data ?? [];
 }
 
 export async function getPositions(accountId: AccountId): Promise<Position[]> {
