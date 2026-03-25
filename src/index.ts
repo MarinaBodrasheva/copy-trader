@@ -2,6 +2,7 @@ import { authenticate } from './api/tradovate.js';
 import { TradovateSocket } from './ws/TradovateSocket.js';
 import { CopyEngine } from './services/CopyEngine.js';
 import { PositionTracker } from './services/PositionTracker.js';
+import { DailyLossGuard } from './services/DailyLossGuard.js';
 import { config } from './config/index.js';
 
 async function main(): Promise<void> {
@@ -21,7 +22,14 @@ async function main(): Promise<void> {
   const positionTracker = new PositionTracker();
   await positionTracker.initialize();
 
-  const copyEngine = new CopyEngine(positionTracker);
+  let dailyLossGuard: DailyLossGuard | undefined;
+  if (config.maxDailyLossUsd > 0) {
+    console.log(`[CopyTrader] Daily loss guard enabled — limit: $${config.maxDailyLossUsd} per slave`);
+    dailyLossGuard = new DailyLossGuard(config.slaveAccountIds, config.maxDailyLossUsd);
+    await dailyLossGuard.initialize();
+  }
+
+  const copyEngine = new CopyEngine(positionTracker, dailyLossGuard);
   const socket     = new TradovateSocket(fill => copyEngine.onFill(fill));
 
   await socket.connect();

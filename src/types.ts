@@ -48,6 +48,13 @@ export interface FailureLogEntry {
   error:          string;
 }
 
+// ── Tradovate cash balance snapshot ────────────────────────────────────────
+
+export interface CashBalance {
+  accountId:    AccountId;
+  realizedPnl:  number;
+}
+
 // ── PositionTracker interface (for dependency injection / mocking) ──────────
 
 export interface IPositionTracker {

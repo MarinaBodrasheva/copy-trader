@@ -5,8 +5,12 @@ vi.mock('../src/api/tradovate.js', () => ({ placeMarketOrder: vi.fn() }));
 vi.mock('../src/services/FailureLogger.js',  () => ({ logFailure: vi.fn() }));
 vi.mock('../src/services/Alerter.js',        () => ({ alertCopyFailure: vi.fn(), sendAlert: vi.fn() }));
 vi.mock('../src/config/index.js',  () => ({ config: { masterAccountId: 1, slaveAccountIds: [2] } }));
+vi.mock('../src/services/DailyLossGuard.js', () => ({
+  DailyLossGuard: vi.fn().mockImplementation(() => ({ isLocked: vi.fn().mockReturnValue(false) })),
+}));
 
 import { CopyEngine } from '../src/services/CopyEngine.js';
+import { DailyLossGuard } from '../src/services/DailyLossGuard.js';
 import { placeMarketOrder } from '../src/api/tradovate.js';
 import { logFailure } from '../src/services/FailureLogger.js';
 import { alertCopyFailure, sendAlert } from '../src/services/Alerter.js';
@@ -187,6 +191,28 @@ describe('CopyEngine', () => {
 
     expect(placeMarketOrder).toHaveBeenCalledTimes(2);
     expect(sendAlert).not.toHaveBeenCalled();
+  });
+
+  // ── Daily loss guard ───────────────────────────────────────────────────────
+
+  it('skips copy when slave is locked by daily loss guard', async () => {
+    const lockedGuard = new DailyLossGuard([], 0);
+    vi.mocked(lockedGuard.isLocked).mockReturnValue(true);
+    const engineWithGuard = new CopyEngine(tracker, lockedGuard);
+
+    await engineWithGuard.onFill(makeFill());
+
+    expect(placeMarketOrder).not.toHaveBeenCalled();
+  });
+
+  it('copies normally when daily loss guard says account is not locked', async () => {
+    const unlockedGuard = new DailyLossGuard([], 0);
+    vi.mocked(unlockedGuard.isLocked).mockReturnValue(false);
+    const engineWithGuard = new CopyEngine(tracker, unlockedGuard);
+
+    await engineWithGuard.onFill(makeFill());
+
+    expect(placeMarketOrder).toHaveBeenCalledOnce();
   });
 
   it('sends critical alert after max retries with slave still open', async () => {

@@ -16,13 +16,14 @@ interface TelegramConfig {
 }
 
 export interface AppConfig {
-  env:            string;
-  restBase:       string;
-  wsUrl:          string;
-  credentials:    Credentials;
+  env:             string;
+  restBase:        string;
+  wsUrl:           string;
+  credentials:     Credentials;
   masterAccountId: AccountId;
   slaveAccountIds: AccountId[];
-  telegram:       TelegramConfig;
+  telegram:        TelegramConfig;
+  maxDailyLossUsd: number;
 }
 
 const env = process.env.TRADOVATE_ENV ?? 'demo';
@@ -54,4 +55,7 @@ export const config: AppConfig = {
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
     chatId:   process.env.TELEGRAM_CHAT_ID   ?? '',
   },
+
+  // Set to 0 to disable the daily loss guard
+  maxDailyLossUsd: Number(process.env.MAX_DAILY_LOSS_USD ?? 0),
 };

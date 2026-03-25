@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { config } from '../config/index.js';
-import type { AccountId, PlaceOrderParams, PlaceOrderResponse, Position } from '../types.js';
+import type { AccountId, CashBalance, PlaceOrderParams, PlaceOrderResponse, Position } from '../types.js';
 
 let accessToken: string | null = null;
 let tokenExpiry: number | null = null;
@@ -70,4 +70,12 @@ export async function getPositions(accountId: AccountId): Promise<Position[]> {
   });
   // Tradovate returns all positions for the user — filter to the requested account
   return (res.data ?? []).filter(p => p.accountId === accountId);
+}
+
+export async function getCashBalance(accountId: AccountId): Promise<CashBalance | null> {
+  const token = await getToken();
+  const res = await axios.get<CashBalance[]>(`${config.restBase}/cashBalance/list`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return (res.data ?? []).find(b => b.accountId === accountId) ?? null;
 }

@@ -2,6 +2,7 @@ import { placeMarketOrder } from '../api/tradovate.js';
 import { config } from '../config/index.js';
 import { logFailure } from './FailureLogger.js';
 import { alertCopyFailure, sendAlert } from './Alerter.js';
+import { DailyLossGuard } from './DailyLossGuard.js';
 import type { AccountId, Action, ContractId, Fill, IPositionTracker } from '../types.js';
 
 const CLOSE_VERIFY_DELAY_MS = 3000;
@@ -27,7 +28,10 @@ interface VerifyContext {
 export class CopyEngine {
   private readonly processedFills = new Set<number>();
 
-  constructor(private readonly positionTracker: IPositionTracker) {}
+  constructor(
+    private readonly positionTracker: IPositionTracker,
+    private readonly dailyLossGuard?: DailyLossGuard,
+  ) {}
 
   // ── Entry point for ALL fills from the WebSocket ───────────────────────────
 
@@ -87,6 +91,12 @@ export class CopyEngine {
 
   private async _copyToSlave(ctx: CopyContext): Promise<void> {
     const { accountId, contractId, action, qty, orderId, isClose } = ctx;
+
+    // Daily loss guard: skip if this slave has hit its daily loss limit
+    if (this.dailyLossGuard?.isLocked(accountId)) {
+      console.warn(`[CopyEngine] ⛔ Slave ${accountId} is locked by daily loss guard — skipping copy`);
+      return;
+    }
 
     // Safety guard: don't send a close to a flat slave — it would open a reverse position
     if (isClose) {
