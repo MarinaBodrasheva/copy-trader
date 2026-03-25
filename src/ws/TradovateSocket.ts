@@ -1,17 +1,18 @@
 import WebSocket from 'ws';
 import { config } from '../config/index.js';
 import { getToken } from '../api/tradovate.js';
-import type { Fill } from '../types.js';
+import type { CashBalanceUpdate, Fill } from '../types.js';
 
 const HEARTBEAT_INTERVAL = 2500; // ms — Tradovate requires heartbeat every 2.5 s
 
-type FillCallback = (fill: Fill) => void;
+type FillCallback          = (fill: Fill) => void;
+type CashBalanceCallback   = (update: CashBalanceUpdate) => void;
 
 interface WsMessage {
   e?: string;
   d?: {
     entityType?: string;
-    entity?:     Fill & Record<string, unknown>;
+    entity?:     Record<string, unknown>;
   };
 }
 
@@ -21,7 +22,10 @@ export class TradovateSocket {
   private heartbeatTimer:  ReturnType<typeof setInterval> | null = null;
   private readonly reconnectDelay = 3000;
 
-  constructor(private readonly onFill: FillCallback) {}
+  constructor(
+    private readonly onFill:         FillCallback,
+    private readonly onCashBalance?: CashBalanceCallback,
+  ) {}
 
   async connect(): Promise<void> {
     const token = await getToken();
@@ -101,8 +105,11 @@ export class TradovateSocket {
 
     if (msg.e === 'props' && msg.d) {
       const { entityType, entity } = msg.d;
-      if (entityType === 'executionReport' && entity?.execType === 'Fill') {
-        this.onFill(entity as Fill);
+      if (entityType === 'executionReport' && entity?.['execType'] === 'Fill') {
+        this.onFill(entity as unknown as Fill);
+      }
+      if (entityType === 'cashBalance' && entity?.['accountId'] !== undefined) {
+        this.onCashBalance?.(entity as unknown as CashBalanceUpdate);
       }
     }
   }

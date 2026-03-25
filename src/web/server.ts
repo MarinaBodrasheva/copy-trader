@@ -4,11 +4,21 @@ import { fileURLToPath } from 'url';
 import { getAccountList, getCashBalance, getPositions, placeMarketOrder } from '../api/tradovate.js';
 import { config } from '../config/index.js';
 import type { DailyLossGuard } from '../services/DailyLossGuard.js';
-import type { AccountSummary } from '../types.js';
+import type { AccountId, AccountSummary, CashBalanceUpdate } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Cache results for 5 s to avoid hammering the API on every page load
+// In-memory store updated live by WebSocket cashBalance push events
+const openPnlStore:     Map<AccountId, number> = new Map();
+const realizedPnlStore: Map<AccountId, number> = new Map();
+
+/** Called from TradovateSocket whenever a cashBalance WS event arrives. */
+export function applyWsCashBalance(update: CashBalanceUpdate): void {
+  if (update.openPnL     !== undefined) openPnlStore.set(update.accountId,     update.openPnL);
+  if (update.realizedPnl !== undefined) realizedPnlStore.set(update.accountId, update.realizedPnl);
+}
+
+// Cache REST results for 5 s (balance + realized P&L fallback when WS hasn't fired yet)
 const CACHE_TTL_MS = 5_000;
 let cachedSummaries: AccountSummary[] = [];
 let cacheExpiry = 0;
@@ -31,9 +41,10 @@ async function buildSummaries(guard?: DailyLossGuard): Promise<AccountSummary[]>
       accountId,
       name:        nameMap.get(accountId) ?? String(accountId),
       role:        accountId === config.masterAccountId ? 'master' : 'slave',
-      balance:     bal?.amount      ?? 0,
-      realizedPnl: bal?.realizedPnl ?? 0,
-      openPnL:     bal?.openPnL     ?? null,
+      balance:     bal?.amount ?? 0,
+      // Prefer live WS value; fall back to REST response
+      realizedPnl: realizedPnlStore.get(accountId) ?? bal?.realizedPnl ?? 0,
+      openPnL:     openPnlStore.get(accountId)     ?? bal?.openPnL     ?? null,
       isLocked:    guard?.isLocked(accountId) ?? false,
     };
   });

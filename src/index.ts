@@ -3,7 +3,7 @@ import { TradovateSocket } from './ws/TradovateSocket.js';
 import { CopyEngine } from './services/CopyEngine.js';
 import { PositionTracker } from './services/PositionTracker.js';
 import { DailyLossGuard } from './services/DailyLossGuard.js';
-import { startDashboard } from './web/server.js';
+import { startDashboard, applyWsCashBalance } from './web/server.js';
 import { config } from './config/index.js';
 
 async function main(): Promise<void> {
@@ -24,16 +24,30 @@ async function main(): Promise<void> {
   await positionTracker.initialize();
 
   let dailyLossGuard: DailyLossGuard | undefined;
-  if (config.maxDailyLossUsd > 0) {
-    console.log(`[CopyTrader] Daily loss guard enabled — limit: $${config.maxDailyLossUsd} per slave`);
-    dailyLossGuard = new DailyLossGuard(config.slaveAccountIds, config.maxDailyLossUsd);
+  if (config.maxDailyLossUsd > 0 || config.maxTotalDailyLossUsd > 0) {
+    console.log(
+      `[CopyTrader] Daily loss guard enabled` +
+      (config.maxDailyLossUsd      > 0 ? ` — realized limit: $${config.maxDailyLossUsd}` : '') +
+      (config.maxTotalDailyLossUsd > 0 ? ` — total limit: $${config.maxTotalDailyLossUsd}` : ''),
+    );
+    dailyLossGuard = new DailyLossGuard(
+      config.slaveAccountIds,
+      config.maxDailyLossUsd,
+      config.maxTotalDailyLossUsd,
+    );
     await dailyLossGuard.initialize();
   }
 
   startDashboard(config.webPort, dailyLossGuard);
 
   const copyEngine = new CopyEngine(positionTracker, dailyLossGuard);
-  const socket     = new TradovateSocket(fill => copyEngine.onFill(fill));
+  const socket     = new TradovateSocket(
+    fill   => copyEngine.onFill(fill),
+    update => {
+      applyWsCashBalance(update);           // → dashboard openPnL store
+      dailyLossGuard?.applyUpdate(update);  // → instant limit evaluation
+    },
+  );
 
   await socket.connect();
 

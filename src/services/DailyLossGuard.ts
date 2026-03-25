@@ -1,31 +1,54 @@
 import { getCashBalance } from '../api/tradovate.js';
 import { logFailure } from './FailureLogger.js';
 import { sendAlert } from './Alerter.js';
-import type { AccountId } from '../types.js';
+import type { AccountId, CashBalanceUpdate } from '../types.js';
 
-const CHECK_INTERVAL_MS = 60_000; // check every minute
+// REST poll is now only a safety net — WS is the primary update path
+const CHECK_INTERVAL_MS = 60_000;
+
+interface PnlSnapshot {
+  realized: number;
+  open:     number;
+}
 
 export class DailyLossGuard {
   private readonly lockedAccounts  = new Set<AccountId>();
-  private readonly alertedAccounts = new Set<AccountId>(); // send alert only once per lock
+  private readonly alertedAccounts = new Set<AccountId>();
+  private readonly pnlByAccount    = new Map<AccountId, PnlSnapshot>();
   private checkInterval?: ReturnType<typeof setInterval>;
   private currentTradeDate = '';
 
   constructor(
-    private readonly slaveAccountIds: AccountId[],
-    private readonly maxDailyLossUsd: number,
+    private readonly slaveAccountIds:     AccountId[],
+    private readonly maxDailyLossUsd:     number, // realized only  (0 = disabled)
+    private readonly maxTotalDailyLossUsd: number, // realized + open (0 = disabled)
   ) {}
 
-  /** Fetch current P&L for all slaves and start background polling. */
+  /** Fetch initial P&L via REST and start background safety-net polling. */
   async initialize(): Promise<void> {
     this.currentTradeDate = todayUtc();
     await this._checkAll();
     this.checkInterval = setInterval(() => void this._tick(), CHECK_INTERVAL_MS);
   }
 
-  /** Fast synchronous check — used before every copy attempt. */
+  /** Fast synchronous check — called before every copy attempt. */
   isLocked(accountId: AccountId): boolean {
     return this.lockedAccounts.has(accountId);
+  }
+
+  /**
+   * Called by TradovateSocket whenever a cashBalance WebSocket event arrives.
+   * Updates in-memory P&L and immediately evaluates limits — no REST call needed.
+   */
+  applyUpdate(update: CashBalanceUpdate): void {
+    if (!this.slaveAccountIds.includes(update.accountId)) return;
+
+    const snap = this.pnlByAccount.get(update.accountId) ?? { realized: 0, open: 0 };
+    if (update.realizedPnl !== undefined) snap.realized = update.realizedPnl;
+    if (update.openPnL     !== undefined) snap.open     = update.openPnL;
+    this.pnlByAccount.set(update.accountId, snap);
+
+    void this._evaluate(update.accountId, snap);
   }
 
   /** Stop the background interval (call on shutdown). */
@@ -38,10 +61,10 @@ export class DailyLossGuard {
   private async _tick(): Promise<void> {
     const today = todayUtc();
     if (today !== this.currentTradeDate) {
-      // New trading day — reset all locks
       this.currentTradeDate = today;
       this.lockedAccounts.clear();
       this.alertedAccounts.clear();
+      this.pnlByAccount.clear();
       console.log('[DailyLossGuard] New trading day — all slave accounts unlocked');
     }
     await this._checkAll();
@@ -51,8 +74,8 @@ export class DailyLossGuard {
     await Promise.all(this.slaveAccountIds.map(id => this._checkAccount(id)));
   }
 
+  /** REST safety-net poll — updates pnlByAccount then evaluates limits. */
   private async _checkAccount(accountId: AccountId): Promise<void> {
-    // Skip API call if already locked — no point re-fetching
     if (this.lockedAccounts.has(accountId)) return;
 
     let balance;
@@ -69,36 +92,56 @@ export class DailyLossGuard {
       return;
     }
 
-    const { realizedPnl } = balance;
+    const snap = this.pnlByAccount.get(accountId) ?? { realized: 0, open: 0 };
+    snap.realized = balance.realizedPnl;
+    if (balance.openPnL !== undefined) snap.open = balance.openPnL;
+    this.pnlByAccount.set(accountId, snap);
 
-    if (realizedPnl < -this.maxDailyLossUsd) {
-      this.lockedAccounts.add(accountId);
-      console.warn(
-        `[DailyLossGuard] ⛔ Slave ${accountId} locked — ` +
-        `daily loss $${Math.abs(realizedPnl).toFixed(2)} exceeds limit $${this.maxDailyLossUsd}`,
-      );
+    await this._evaluate(accountId, snap);
+  }
 
-      if (!this.alertedAccounts.has(accountId)) {
-        this.alertedAccounts.add(accountId);
+  /** Check both limits and lock the account if either is breached. */
+  private async _evaluate(accountId: AccountId, snap: PnlSnapshot): Promise<void> {
+    if (this.lockedAccounts.has(accountId)) return;
 
-        logFailure({
-          slaveAccountId: accountId,
-          contractId:     'N/A',
-          action:         'Sell',
-          qty:            0,
-          orderId:        'daily-loss-guard',
-          error:          `Daily loss limit reached: $${Math.abs(realizedPnl).toFixed(2)} / $${this.maxDailyLossUsd}`,
-        });
+    const { realized, open } = snap;
+    const total = realized + open;
 
-        await sendAlert(
-          `<b>⛔ Daily Loss Limit Reached — Slave Locked</b>\n` +
-          `Slave: <code>${accountId}</code>\n` +
-          `Realized P&amp;L today: <code>-$${Math.abs(realizedPnl).toFixed(2)}</code>\n` +
-          `Limit: <code>$${this.maxDailyLossUsd}</code>\n` +
-          `No further trades will be copied to this account today.`,
-        );
-      }
-    }
+    const realizedBreached = this.maxDailyLossUsd      > 0 && realized < -this.maxDailyLossUsd;
+    const totalBreached    = this.maxTotalDailyLossUsd > 0 && total    < -this.maxTotalDailyLossUsd;
+
+    if (!realizedBreached && !totalBreached) return;
+
+    this.lockedAccounts.add(accountId);
+
+    const reason = totalBreached
+      ? `total loss $${Math.abs(total).toFixed(2)} (realized $${Math.abs(realized).toFixed(2)} + open $${Math.abs(open).toFixed(2)}) exceeds limit $${this.maxTotalDailyLossUsd}`
+      : `realized loss $${Math.abs(realized).toFixed(2)} exceeds limit $${this.maxDailyLossUsd}`;
+
+    console.warn(`[DailyLossGuard] ⛔ Slave ${accountId} locked — ${reason}`);
+
+    if (this.alertedAccounts.has(accountId)) return;
+    this.alertedAccounts.add(accountId);
+
+    const limitLine = totalBreached
+      ? `Total P&amp;L (realized + open): <code>-$${Math.abs(total).toFixed(2)}</code>  |  Limit: <code>$${this.maxTotalDailyLossUsd}</code>`
+      : `Realized P&amp;L today: <code>-$${Math.abs(realized).toFixed(2)}</code>  |  Limit: <code>$${this.maxDailyLossUsd}</code>`;
+
+    logFailure({
+      slaveAccountId: accountId,
+      contractId:     'N/A',
+      action:         'Sell',
+      qty:            0,
+      orderId:        'daily-loss-guard',
+      error:          `Daily loss limit reached: ${reason}`,
+    });
+
+    await sendAlert(
+      `<b>⛔ Daily Loss Limit Reached — Slave Locked</b>\n` +
+      `Slave: <code>${accountId}</code>\n` +
+      `${limitLine}\n` +
+      `No further trades will be copied to this account today.`,
+    );
   }
 }
 

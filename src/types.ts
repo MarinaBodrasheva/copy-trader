@@ -55,13 +55,22 @@ export interface AccountInfo {
   name: string;
 }
 
-// ── Tradovate cash balance snapshot ────────────────────────────────────────
+// ── Tradovate cash balance snapshot (REST) ─────────────────────────────────
 
 export interface CashBalance {
   accountId:   AccountId;
   amount:      number;   // current cash balance
   realizedPnl: number;   // today's realized P&L
-  openPnL?:    number;   // unrealized P&L on open positions (if provided by API)
+  openPnL?:    number;   // unrealized P&L (if provided by REST response)
+}
+
+// ── Tradovate cash balance update (WebSocket push) ─────────────────────────
+
+export interface CashBalanceUpdate {
+  accountId:    AccountId;
+  amount?:      number;
+  realizedPnl?: number;
+  openPnL?:     number;
 }
 
 // ── Dashboard account summary ──────────────────────────────────────────────
