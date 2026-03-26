@@ -29,27 +29,60 @@ export class CopyEngine {
   private readonly processedFills  = new Set<number>();
   private readonly disabledSlaves  = new Set<AccountId>();
   private masterId: AccountId;
+  private allAccountIds: AccountId[];
 
   constructor(
     private readonly positionTracker: IPositionTracker,
     private readonly dailyLossGuard?: DailyLossGuard,
   ) {
-    this.masterId = config.masterAccountId;
+    this.masterId      = config.masterAccountId;
+    this.allAccountIds = [config.masterAccountId, ...config.slaveAccountIds];
   }
 
   // ── Runtime master / slave control ────────────────────────────────────────
 
   getMasterId(): AccountId { return this.masterId; }
 
+  getAllAccountIds(): AccountId[] { return this.allAccountIds; }
+
+  /**
+   * Update the tracked account list — typically called once after fetching
+   * the account list from the Tradovate API.
+   * - New non-master accounts are disabled by default.
+   * - Existing enable/disable state is preserved for already-tracked accounts.
+   * - Accounts no longer in the list are removed from the disabled set.
+   */
+  setAccountIds(ids: AccountId[]): void {
+    const oldIds   = new Set(this.allAccountIds);
+    const newIdSet = new Set(ids);
+
+    this.allAccountIds = ids;
+
+    // Newly added non-master accounts default to disabled
+    for (const id of ids) {
+      if (!oldIds.has(id) && id !== this.masterId) {
+        this.disabledSlaves.add(id);
+      }
+    }
+
+    // Remove stale entries that are no longer tracked
+    for (const id of [...this.disabledSlaves]) {
+      if (!newIdSet.has(id)) {
+        this.disabledSlaves.delete(id);
+      }
+    }
+
+    console.log(`[CopyEngine] Account list updated: ${ids.join(', ')} (master: ${this.masterId})`);
+  }
+
   setMaster(accountId: AccountId): void {
     this.masterId = accountId;
     console.log(`[CopyEngine] Master changed to ${accountId}`);
   }
 
-  /** All configured accounts except the current master. */
+  /** All tracked accounts except the current master. */
   getSlaveIds(): AccountId[] {
-    const all = [config.masterAccountId, ...config.slaveAccountIds];
-    return all.filter(id => id !== this.masterId);
+    return this.allAccountIds.filter(id => id !== this.masterId);
   }
 
   async setSlaveEnabled(accountId: AccountId, enabled: boolean): Promise<void> {

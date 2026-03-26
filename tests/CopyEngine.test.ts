@@ -271,6 +271,86 @@ describe('CopyEngine', () => {
     );
   });
 
+  // ── setAccountIds ──────────────────────────────────────────────────────────
+
+  it('getAllAccountIds returns master and all slaves', () => {
+    expect(engine.getAllAccountIds()).toEqual([MASTER, SLAVE]);
+  });
+
+  it('getSlaveIds returns all accounts except the current master', () => {
+    expect(engine.getSlaveIds()).toEqual([SLAVE]);
+  });
+
+  it('setAccountIds updates the tracked account list', () => {
+    const SLAVE2 = 3;
+    engine.setAccountIds([MASTER, SLAVE, SLAVE2]);
+
+    expect(engine.getAllAccountIds()).toEqual([MASTER, SLAVE, SLAVE2]);
+  });
+
+  it('setAccountIds disables newly added accounts by default', () => {
+    const SLAVE2 = 3;
+    engine.setAccountIds([MASTER, SLAVE, SLAVE2]);
+
+    // SLAVE2 is new — should be disabled
+    expect(engine.isSlaveEnabled(SLAVE2)).toBe(false);
+  });
+
+  it('setAccountIds preserves existing enable/disable state', async () => {
+    // Disable SLAVE first
+    await engine.setSlaveEnabled(SLAVE, false);
+
+    // Now update account list — SLAVE was already tracked, state should persist
+    engine.setAccountIds([MASTER, SLAVE]);
+
+    expect(engine.isSlaveEnabled(SLAVE)).toBe(false);
+  });
+
+  it('setAccountIds removes stale entries from disabled set', async () => {
+    await engine.setSlaveEnabled(SLAVE, false);
+
+    // Remove SLAVE from the account list entirely
+    engine.setAccountIds([MASTER]);
+
+    // Re-add SLAVE — should be treated as a new account (disabled by default)
+    // and the old disabled entry should have been cleaned up
+    engine.setAccountIds([MASTER, SLAVE]);
+
+    expect(engine.isSlaveEnabled(SLAVE)).toBe(false); // disabled as a new account
+    expect(engine.getAllAccountIds()).toContain(SLAVE);
+  });
+
+  it('setAccountIds does not disable the current master', () => {
+    engine.setAccountIds([MASTER, SLAVE]);
+
+    // Master should not appear in disabled set
+    expect(engine.isSlaveEnabled(MASTER)).toBe(true);
+  });
+
+  it('copies to a newly added slave after setAccountIds', async () => {
+    const SLAVE2 = 3;
+    engine.setAccountIds([MASTER, SLAVE, SLAVE2]);
+    // Explicitly enable SLAVE2 (new accounts start disabled)
+    await engine.setSlaveEnabled(SLAVE2, true);
+
+    await engine.onFill(makeFill({ orderId: 50 }));
+
+    expect(placeMarketOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: SLAVE2 }),
+    );
+  });
+
+  it('does not copy to an account removed via setAccountIds', async () => {
+    // Remove SLAVE from the tracked list
+    engine.setAccountIds([MASTER]);
+
+    await engine.onFill(makeFill({ orderId: 51 }));
+
+    expect(placeMarketOrder).not.toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: SLAVE }),
+    );
+  });
+
   it('sends critical alert after max retries with slave still open', async () => {
     vi.useFakeTimers();
     vi.mocked(tracker.isClosingFill).mockReturnValue(true);

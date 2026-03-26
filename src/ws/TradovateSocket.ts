@@ -7,6 +7,7 @@ const HEARTBEAT_INTERVAL = 2500; // ms — Tradovate requires heartbeat every 2.
 
 type FillCallback          = (fill: Fill) => void;
 type CashBalanceCallback   = (update: CashBalanceUpdate) => void;
+type StatusChangeCallback  = (connected: boolean) => void;
 
 interface WsMessage {
   e?: string;
@@ -23,8 +24,9 @@ export class TradovateSocket {
   private readonly reconnectDelay = 3000;
 
   constructor(
-    private readonly onFill:         FillCallback,
-    private readonly onCashBalance?: CashBalanceCallback,
+    private readonly onFill:          FillCallback,
+    private readonly onCashBalance?:  CashBalanceCallback,
+    private readonly onStatusChange?: StatusChangeCallback,
   ) {}
 
   async connect(): Promise<void> {
@@ -43,6 +45,7 @@ export class TradovateSocket {
     this.ws.on('close', (code: number) => {
       console.warn(`[WS] Disconnected (${code}), reconnecting in ${this.reconnectDelay}ms...`);
       this._stopHeartbeat();
+      this.onStatusChange?.(false);
       setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
@@ -100,6 +103,7 @@ export class TradovateSocket {
       console.log('[WS] Authorized on WebSocket');
       this._startHeartbeat();
       this._subscribeUserSync();
+      this.onStatusChange?.(true);
       return;
     }
 

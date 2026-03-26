@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Copy Trader</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d0f14'/><polyline points='3,24 10,14 16,18 22,8 29,12' fill='none' stroke='%2322c55e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/><polyline points='22,8 29,8 29,15' fill='none' stroke='%2322c55e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -163,9 +164,36 @@
     }
     #toast.show { opacity: 1; }
     #toast.err  { border-color: #7f1d1d; color: #fca5a5; }
+
+    /* ── Connection banner ── */
+    #conn-banner {
+      display: none;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.55rem 1.25rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+    #conn-banner.connecting  { display: flex; background: #1c1a08; color: #fbbf24; border-bottom: 1px solid #78350f; }
+    #conn-banner.disconnected { display: flex; background: #1c0808; color: #f87171; border-bottom: 1px solid #7f1d1d; }
+    .spinner {
+      width: 12px; height: 12px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
+
+  <!-- Connection banner -->
+  <div id="conn-banner">
+    <span class="spinner"></span>
+    <span id="conn-msg"></span>
+  </div>
 
   <!-- Top bar -->
   <div class="topbar">
@@ -194,8 +222,7 @@
           <th>Status</th>
           <th>Follow</th>
           <th>Account</th>
-          <th>Connection</th>
-          <th>Balance</th>
+            <th>Balance</th>
           <th>Day P&amp;L</th>
           <th>Open P&amp;L</th>
           <th>Ratio</th>
@@ -246,7 +273,6 @@
             <strong>${a.name}</strong>${lockedBadge}
             <div style="color:#475569;font-size:0.75rem">#${a.accountId}</div>
           </td>
-          <td style="color:#64748b">Tradovate</td>
           <td>${USD.format(a.balance)}</td>
           <td>${fmtPnl(a.realizedPnl)}</td>
           <td>${fmtPnl(a.openPnL)}</td>
@@ -270,20 +296,33 @@
 
     async function refresh() {
       try {
-        const res = await fetch('/api/accounts');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        accounts = await res.json();
+        const [accountsRes, statusRes] = await Promise.all([
+          fetch('/api/accounts'),
+          fetch('/api/status'),
+        ]);
+
+        // Update connection banner
+        if (statusRes.ok) {
+          const s = await statusRes.json();
+          const banner = document.getElementById('conn-banner');
+          const msg    = document.getElementById('conn-msg');
+          banner.className = s.status === 'connected' ? '' : s.status;
+          msg.textContent  = s.message;
+        }
+
+        if (!accountsRes.ok) throw new Error(`HTTP ${accountsRes.status}`);
+        accounts = await accountsRes.json();
 
         document.getElementById('tbody').innerHTML = accounts.map(renderRow).join('');
         updateSummary(accounts);
 
-        const status = document.getElementById('status');
-        status.textContent = 'Updated ' + new Date().toLocaleTimeString();
-        status.style.color = '#22c55e';
+        const statusEl = document.getElementById('status');
+        statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+        statusEl.style.color = '#22c55e';
       } catch (err) {
-        const status = document.getElementById('status');
-        status.textContent = 'Error';
-        status.style.color = '#ef4444';
+        const statusEl = document.getElementById('status');
+        statusEl.textContent = 'Error';
+        statusEl.style.color = '#ef4444';
         toast('Failed to load: ' + err.message, true);
       }
     }
