@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Copy Trader</title>
+  <title>Copy Trader — Trade Smart, Copy Fast</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d0f14'/><polyline points='3,24 10,14 16,18 22,8 29,12' fill='none' stroke='%2322c55e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/><polyline points='22,8 29,8 29,15' fill='none' stroke='%2322c55e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -25,6 +25,18 @@
       background: #131720;
       border-bottom: 1px solid #1e2433;
       flex-wrap: wrap;
+    }
+
+    .slogan {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      background: linear-gradient(90deg, #22c55e, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      white-space: nowrap;
     }
 
     .topbar-right { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
@@ -79,6 +91,7 @@
     th, td { padding: 0.7rem 1rem; text-align: left; border-bottom: 1px solid #1a2030; }
     th { font-weight: 600; }
     tbody tr:hover { background: #151c2a; }
+    tbody tr.disabled { opacity: 0.45; }
 
     /* ── Status dot ── */
     .dot {
@@ -98,12 +111,19 @@
       position: relative; width: 36px; height: 20px;
       cursor: pointer;
     }
-    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle input {
+      position: absolute;
+      opacity: 0;
+      width: 0; height: 0;
+      pointer-events: none;
+    }
+    .toggle.busy { opacity: 0.45; cursor: not-allowed; }
     .slider {
       position: absolute; inset: 0;
       background: #2a3144;
       border-radius: 999px;
       transition: background 0.2s;
+      z-index: 0;
     }
     .slider::before {
       content: '';
@@ -197,6 +217,7 @@
 
   <!-- Top bar -->
   <div class="topbar">
+    <span class="slogan">⚡ Trade Smart. Copy Fast.</span>
     <button class="btn" onclick="enableAll()">Enable all</button>
     <button class="btn" onclick="disableAll()">Disable all</button>
     <div class="topbar-right">
@@ -253,10 +274,11 @@
 
       const followCell = isMaster
         ? `<span class="crown active" title="Leader">👑</span>`
-        : `<label class="toggle" title="${a.enabled ? 'Disable' : 'Enable'} copying">
-             <input type="checkbox" ${a.enabled ? 'checked' : ''} onchange="toggleSlave(${a.accountId}, this.checked, this)">
+        : `<div class="toggle" title="${a.enabled ? 'Disable' : 'Enable'} copying"
+               onclick="handleToggle(${a.accountId}, this)">
+             <input type="checkbox" ${a.enabled ? 'checked' : ''}>
              <span class="slider"></span>
-           </label>`;
+           </div>`;
 
       const lockedBadge = a.isLocked ? ' <span class="badge badge-locked">⛔ locked</span>' : '';
 
@@ -266,7 +288,7 @@
         : '';
 
       return `
-        <tr id="row-${a.accountId}">
+        <tr id="row-${a.accountId}" class="${!isMaster && !a.enabled ? 'disabled' : ''}">
           <td><span class="dot ${a.enabled || isMaster ? '' : 'off'}"></span></td>
           <td>${followCell}</td>
           <td>
@@ -327,8 +349,12 @@
       }
     }
 
-    async function toggleSlave(accountId, enabled, checkbox) {
-      checkbox.disabled = true;
+    async function handleToggle(accountId, el) {
+      if (el.classList.contains('busy')) return;
+      const cb      = el.querySelector('input');
+      const enabled = !cb.checked;
+      cb.checked = enabled;              // optimistic update
+      el.classList.add('busy');
       try {
         const res = await fetch(`/api/accounts/${accountId}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -337,10 +363,11 @@
           : `Account #${accountId} disabled and flattened`);
         refresh();
       } catch (err) {
+        cb.checked = !enabled;           // revert on error
         toast('Toggle failed: ' + err.message, true);
-        refresh(); // revert UI to server state
+        refresh();
       } finally {
-        checkbox.disabled = false;
+        el.classList.remove('busy');
       }
     }
 

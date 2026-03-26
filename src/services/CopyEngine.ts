@@ -76,8 +76,21 @@ export class CopyEngine {
   }
 
   setMaster(accountId: AccountId): void {
+    const previousMaster = this.masterId;
     this.masterId = accountId;
+    // Demoted master becomes a slave — ensure it starts enabled
+    if (previousMaster !== accountId) {
+      this.disabledSlaves.delete(previousMaster);
+    }
     console.log(`[CopyEngine] Master changed to ${accountId}`);
+  }
+
+  /** Disable all current slaves — used at startup so the user enables them explicitly. */
+  disableAllSlaves(): void {
+    for (const id of this.getSlaveIds()) {
+      this.disabledSlaves.add(id);
+    }
+    console.log(`[CopyEngine] All slaves disabled (startup default)`);
   }
 
   /** All tracked accounts except the current master. */

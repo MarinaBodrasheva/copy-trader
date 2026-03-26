@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   const copyEngine = new CopyEngine(positionTracker, dailyLossGuard);
 
   // All slaves start disabled — user enables them explicitly in the dashboard
-  copyEngine.setAccountIds([config.masterAccountId, ...config.slaveAccountIds]);
+  copyEngine.disableAllSlaves();
 
   // Dashboard is available immediately — shows "connecting" banner
   startDashboard(config.webPort, copyEngine, dailyLossGuard);

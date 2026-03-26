@@ -271,6 +271,47 @@ describe('CopyEngine', () => {
     );
   });
 
+  it('demoted master is automatically enabled as a slave', () => {
+    // Simulate: SLAVE was previously disabled, now promoted to master
+    engine['disabledSlaves'].add(SLAVE);
+    engine.setMaster(SLAVE); // MASTER is now demoted to slave
+
+    // MASTER was never disabled — should be enabled
+    expect(engine.isSlaveEnabled(MASTER)).toBe(true);
+  });
+
+  it('demoted master stays enabled even if it was disabled before it became master', async () => {
+    // Disable MASTER first (edge case: user disables, then promotes)
+    engine['disabledSlaves'].add(MASTER);
+    engine.setMaster(SLAVE); // MASTER demoted back to slave
+
+    // setMaster should have cleared the disabled flag
+    expect(engine.isSlaveEnabled(MASTER)).toBe(true);
+  });
+
+  // ── disableAllSlaves ───────────────────────────────────────────────────────
+
+  it('disableAllSlaves disables all non-master accounts', () => {
+    engine.disableAllSlaves();
+
+    expect(engine.isSlaveEnabled(SLAVE)).toBe(false);
+  });
+
+  it('disableAllSlaves does not affect the master', () => {
+    engine.disableAllSlaves();
+
+    // Master is not in slave list — isSlaveEnabled should return true
+    expect(engine.isSlaveEnabled(MASTER)).toBe(true);
+  });
+
+  it('does not copy after disableAllSlaves until slave is re-enabled', async () => {
+    engine.disableAllSlaves();
+
+    await engine.onFill(makeFill());
+
+    expect(placeMarketOrder).not.toHaveBeenCalled();
+  });
+
   // ── setAccountIds ──────────────────────────────────────────────────────────
 
   it('getAllAccountIds returns master and all slaves', () => {
