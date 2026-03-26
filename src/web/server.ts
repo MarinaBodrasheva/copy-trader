@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getAccountList, getCashBalance, getPositions, placeMarketOrder } from '../api/tradovate.js';
 import { config } from '../config/index.js';
+import type { CopyEngine } from '../services/CopyEngine.js';
 import type { DailyLossGuard } from '../services/DailyLossGuard.js';
 import type { AccountId, AccountSummary, CashBalanceUpdate } from '../types.js';
 
@@ -18,12 +19,12 @@ export function applyWsCashBalance(update: CashBalanceUpdate): void {
   if (update.realizedPnl !== undefined) realizedPnlStore.set(update.accountId, update.realizedPnl);
 }
 
-// Cache REST results for 5 s (balance + realized P&L fallback when WS hasn't fired yet)
+// Cache REST results for 5 s
 const CACHE_TTL_MS = 5_000;
 let cachedSummaries: AccountSummary[] = [];
 let cacheExpiry = 0;
 
-async function buildSummaries(guard?: DailyLossGuard): Promise<AccountSummary[]> {
+async function buildSummaries(engine: CopyEngine, guard?: DailyLossGuard): Promise<AccountSummary[]> {
   if (Date.now() < cacheExpiry) return cachedSummaries;
 
   const allAccountIds = [config.masterAccountId, ...config.slaveAccountIds];
@@ -36,16 +37,17 @@ async function buildSummaries(guard?: DailyLossGuard): Promise<AccountSummary[]>
   const nameMap = new Map(accounts.map(a => [a.id, a.name]));
 
   cachedSummaries = allAccountIds.map((accountId, i) => {
-    const bal = balances[i];
+    const bal     = balances[i];
+    const isMaster = accountId === engine.getMasterId();
     return {
       accountId,
       name:        nameMap.get(accountId) ?? String(accountId),
-      role:        accountId === config.masterAccountId ? 'master' : 'slave',
+      role:        isMaster ? 'master' : 'slave',
       balance:     bal?.amount ?? 0,
-      // Prefer live WS value; fall back to REST response
       realizedPnl: realizedPnlStore.get(accountId) ?? bal?.realizedPnl ?? 0,
       openPnL:     openPnlStore.get(accountId)     ?? bal?.openPnL     ?? null,
       isLocked:    guard?.isLocked(accountId) ?? false,
+      enabled:     isMaster ? true : engine.isSlaveEnabled(accountId),
     };
   });
 
@@ -53,15 +55,19 @@ async function buildSummaries(guard?: DailyLossGuard): Promise<AccountSummary[]>
   return cachedSummaries;
 }
 
-export function startDashboard(port: number, guard?: DailyLossGuard): void {
+export function startDashboard(port: number, engine: CopyEngine, guard?: DailyLossGuard): void {
   const app = express();
+  app.use(express.json());
 
-  // Serve the public folder (index.html) from project root
   const publicDir = path.resolve(__dirname, '../../public');
   app.use(express.static(publicDir));
 
+  const allAccountIds = new Set([config.masterAccountId, ...config.slaveAccountIds]);
+
+  // ── Accounts summary ───────────────────────────────────────────────────────
+
   app.get('/api/accounts', (_req, res) => {
-    buildSummaries(guard)
+    buildSummaries(engine, guard)
       .then(data => res.json(data))
       .catch(err => {
         console.error('[Dashboard] /api/accounts error:', (err as Error).message);
@@ -69,47 +75,85 @@ export function startDashboard(port: number, guard?: DailyLossGuard): void {
       });
   });
 
-  const allAccountIds = new Set([config.masterAccountId, ...config.slaveAccountIds]);
+  // ── Set master ─────────────────────────────────────────────────────────────
+
+  app.post('/api/master/:accountId', (req, res) => {
+    const accountId = Number(req.params['accountId']);
+    if (!allAccountIds.has(accountId)) {
+      res.status(400).json({ error: 'Unknown account' }); return;
+    }
+    engine.setMaster(accountId);
+    cacheExpiry = 0;
+    res.json({ masterId: accountId });
+  });
+
+  // ── Enable / disable slave ─────────────────────────────────────────────────
+
+  app.post('/api/accounts/:accountId/enable', (req, res) => {
+    const accountId = Number(req.params['accountId']);
+    if (!allAccountIds.has(accountId)) {
+      res.status(400).json({ error: 'Unknown account' }); return;
+    }
+    engine.setSlaveEnabled(accountId, true);
+    cacheExpiry = 0;
+    res.json({ accountId, enabled: true });
+  });
+
+  app.post('/api/accounts/:accountId/disable', (req, res) => {
+    const accountId = Number(req.params['accountId']);
+    if (!allAccountIds.has(accountId)) {
+      res.status(400).json({ error: 'Unknown account' }); return;
+    }
+    // awaited — returns only after open positions are closed
+    engine.setSlaveEnabled(accountId, false)
+      .then(() => { cacheExpiry = 0; res.json({ accountId, enabled: false }); })
+      .catch(err => res.status(500).json({ error: (err as Error).message }));
+  });
+
+  // ── Flatten one account ────────────────────────────────────────────────────
 
   app.post('/api/flatten/:accountId', (req, res) => {
     const accountId = Number(req.params['accountId']);
     if (!allAccountIds.has(accountId)) {
-      res.status(400).json({ error: 'Unknown account' });
-      return;
+      res.status(400).json({ error: 'Unknown account' }); return;
     }
+    flattenAccount(accountId)
+      .then(result => { cacheExpiry = 0; res.json(result); })
+      .catch(err => res.status(500).json({ error: (err as Error).message }));
+  });
 
-    console.log(`[Dashboard] Flatten requested for account ${accountId}`);
+  // ── Flatten all accounts ───────────────────────────────────────────────────
 
-    getPositions(accountId)
-      .then(async positions => {
-        const open = positions.filter(p => p.netPos !== 0);
-        if (open.length === 0) {
-          return { closed: 0 };
-        }
-
-        await Promise.all(open.map(p =>
-          placeMarketOrder({
-            accountId,
-            symbol:   p.contractId,
-            action:   p.netPos > 0 ? 'Sell' : 'Buy',
-            orderQty: Math.abs(p.netPos),
-          }),
-        ));
-
-        // Expire cache so next poll shows fresh data
+  app.post('/api/flatten-all', (_req, res) => {
+    Promise.all([...allAccountIds].map(flattenAccount))
+      .then(results => {
         cacheExpiry = 0;
-
-        console.log(`[Dashboard] Flattened ${open.length} position(s) on account ${accountId}`);
-        return { closed: open.length };
+        res.json({ closed: results.reduce((sum, r) => sum + r.closed, 0) });
       })
-      .then(result => res.json(result))
-      .catch(err => {
-        console.error(`[Dashboard] Flatten error for ${accountId}:`, (err as Error).message);
-        res.status(500).json({ error: (err as Error).message });
-      });
+      .catch(err => res.status(500).json({ error: (err as Error).message }));
   });
 
   app.listen(port, () => {
     console.log(`[Dashboard] Running at http://localhost:${port}`);
   });
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+async function flattenAccount(accountId: AccountId): Promise<{ closed: number }> {
+  const positions = await getPositions(accountId);
+  const open = positions.filter(p => p.netPos !== 0);
+  if (open.length === 0) return { closed: 0 };
+
+  await Promise.all(open.map(p =>
+    placeMarketOrder({
+      accountId,
+      symbol:   p.contractId,
+      action:   p.netPos > 0 ? 'Sell' : 'Buy',
+      orderQty: Math.abs(p.netPos),
+    }),
+  ));
+
+  console.log(`[Dashboard] Flattened ${open.length} position(s) on account ${accountId}`);
+  return { closed: open.length };
 }

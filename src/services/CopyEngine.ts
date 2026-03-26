@@ -1,4 +1,4 @@
-import { placeMarketOrder } from '../api/tradovate.js';
+import { placeMarketOrder, getPositions } from '../api/tradovate.js';
 import { config } from '../config/index.js';
 import { logFailure } from './FailureLogger.js';
 import { alertCopyFailure, sendAlert } from './Alerter.js';
@@ -26,19 +26,88 @@ interface VerifyContext {
 }
 
 export class CopyEngine {
-  private readonly processedFills = new Set<number>();
+  private readonly processedFills  = new Set<number>();
+  private readonly disabledSlaves  = new Set<AccountId>();
+  private masterId: AccountId;
 
   constructor(
     private readonly positionTracker: IPositionTracker,
     private readonly dailyLossGuard?: DailyLossGuard,
-  ) {}
+  ) {
+    this.masterId = config.masterAccountId;
+  }
+
+  // ── Runtime master / slave control ────────────────────────────────────────
+
+  getMasterId(): AccountId { return this.masterId; }
+
+  setMaster(accountId: AccountId): void {
+    this.masterId = accountId;
+    console.log(`[CopyEngine] Master changed to ${accountId}`);
+  }
+
+  /** All configured accounts except the current master. */
+  getSlaveIds(): AccountId[] {
+    const all = [config.masterAccountId, ...config.slaveAccountIds];
+    return all.filter(id => id !== this.masterId);
+  }
+
+  async setSlaveEnabled(accountId: AccountId, enabled: boolean): Promise<void> {
+    if (enabled) {
+      this.disabledSlaves.delete(accountId);
+      console.log(`[CopyEngine] Slave ${accountId} enabled`);
+      return;
+    }
+
+    // Disable first — immediately stops any new copies from being sent
+    this.disabledSlaves.add(accountId);
+    console.log(`[CopyEngine] Slave ${accountId} disabled — flattening open positions`);
+
+    // Then close whatever is still open
+    await this._flattenSlave(accountId);
+  }
+
+  isSlaveEnabled(accountId: AccountId): boolean {
+    return !this.disabledSlaves.has(accountId);
+  }
+
+  private async _flattenSlave(accountId: AccountId): Promise<void> {
+    let positions;
+    try {
+      positions = await getPositions(accountId);
+    } catch (err) {
+      console.error(`[CopyEngine] Failed to fetch positions for slave ${accountId} during flatten:`,
+        err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    const open = positions.filter(p => p.netPos !== 0);
+    if (open.length === 0) {
+      console.log(`[CopyEngine] Slave ${accountId} has no open positions`);
+      return;
+    }
+
+    await Promise.all(open.map(p =>
+      placeMarketOrder({
+        accountId,
+        symbol:   p.contractId,
+        action:   p.netPos > 0 ? 'Sell' : 'Buy',
+        orderQty: Math.abs(p.netPos),
+      }).catch(err => {
+        console.error(`[CopyEngine] Failed to close ${p.contractId} on slave ${accountId}:`,
+          err instanceof Error ? err.message : String(err));
+      }),
+    ));
+
+    console.log(`[CopyEngine] Slave ${accountId} flattened — ${open.length} position(s) closed`);
+  }
 
   // ── Entry point for ALL fills from the WebSocket ───────────────────────────
 
   async onFill(fill: Fill): Promise<void> {
-    if (fill.accountId === config.masterAccountId) {
+    if (fill.accountId === this.masterId) {
       await this._handleMasterFill(fill);
-    } else if (config.slaveAccountIds.includes(fill.accountId)) {
+    } else if (this.getSlaveIds().includes(fill.accountId)) {
       this._handleSlaveFill(fill);
     }
   }
@@ -68,11 +137,11 @@ export class CopyEngine {
 
     console.log(`[CopyEngine] Master fill — ${action} ${qty}x contractId:${contractId}`);
 
-    const isClose = this.positionTracker.isClosingFill(config.masterAccountId, contractId, action);
-    this.positionTracker.applyFill(config.masterAccountId, contractId, action, qty);
+    const isClose = this.positionTracker.isClosingFill(this.masterId, contractId, action);
+    this.positionTracker.applyFill(this.masterId, contractId, action, qty);
 
     await Promise.all(
-      config.slaveAccountIds.map(accountId =>
+      this.getSlaveIds().map(accountId =>
         this._copyToSlave({ accountId, contractId, action, qty, orderId: fill.orderId, isClose }),
       ),
     );
@@ -91,6 +160,12 @@ export class CopyEngine {
 
   private async _copyToSlave(ctx: CopyContext): Promise<void> {
     const { accountId, contractId, action, qty, orderId, isClose } = ctx;
+
+    // Slave disabled via dashboard toggle
+    if (!this.isSlaveEnabled(accountId)) {
+      console.log(`[CopyEngine] Slave ${accountId} is disabled — skipping copy`);
+      return;
+    }
 
     // Daily loss guard: skip if this slave has hit its daily loss limit
     if (this.dailyLossGuard?.isLocked(accountId)) {
@@ -130,7 +205,7 @@ export class CopyEngine {
 
   private async _verifySlavesClosed(ctx: Omit<VerifyContext, 'attempt'>): Promise<void> {
     await sleep(CLOSE_VERIFY_DELAY_MS);
-    for (const accountId of config.slaveAccountIds) {
+    for (const accountId of this.getSlaveIds()) {
       await this._ensureSlaveClosed({ ...ctx, accountId, attempt: 1 });
     }
   }

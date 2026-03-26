@@ -83,6 +83,7 @@ export interface AccountSummary {
   realizedPnl: number;
   openPnL:     number | null;
   isLocked:    boolean;
+  enabled:     boolean; // slaves only — controlled via dashboard toggle
 }
 
 // ── PositionTracker interface (for dependency injection / mocking) ──────────

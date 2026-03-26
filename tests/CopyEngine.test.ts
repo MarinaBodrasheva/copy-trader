@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IPositionTracker, Fill } from '../src/types.js';
 
-vi.mock('../src/api/tradovate.js', () => ({ placeMarketOrder: vi.fn() }));
+vi.mock('../src/api/tradovate.js', () => ({ placeMarketOrder: vi.fn(), getPositions: vi.fn().mockResolvedValue([]) }));
 vi.mock('../src/services/FailureLogger.js',  () => ({ logFailure: vi.fn() }));
 vi.mock('../src/services/Alerter.js',        () => ({ alertCopyFailure: vi.fn(), sendAlert: vi.fn() }));
 vi.mock('../src/config/index.js',  () => ({ config: { masterAccountId: 1, slaveAccountIds: [2] } }));
@@ -11,7 +11,7 @@ vi.mock('../src/services/DailyLossGuard.js', () => ({
 
 import { CopyEngine } from '../src/services/CopyEngine.js';
 import { DailyLossGuard } from '../src/services/DailyLossGuard.js';
-import { placeMarketOrder } from '../src/api/tradovate.js';
+import { placeMarketOrder, getPositions } from '../src/api/tradovate.js';
 import { logFailure } from '../src/services/FailureLogger.js';
 import { alertCopyFailure, sendAlert } from '../src/services/Alerter.js';
 
@@ -196,7 +196,7 @@ describe('CopyEngine', () => {
   // ── Daily loss guard ───────────────────────────────────────────────────────
 
   it('skips copy when slave is locked by daily loss guard', async () => {
-    const lockedGuard = new DailyLossGuard([], 0);
+    const lockedGuard = new DailyLossGuard([], 0, 0);
     vi.mocked(lockedGuard.isLocked).mockReturnValue(true);
     const engineWithGuard = new CopyEngine(tracker, lockedGuard);
 
@@ -206,13 +206,69 @@ describe('CopyEngine', () => {
   });
 
   it('copies normally when daily loss guard says account is not locked', async () => {
-    const unlockedGuard = new DailyLossGuard([], 0);
+    const unlockedGuard = new DailyLossGuard([], 0, 0);
     vi.mocked(unlockedGuard.isLocked).mockReturnValue(false);
     const engineWithGuard = new CopyEngine(tracker, unlockedGuard);
 
     await engineWithGuard.onFill(makeFill());
 
     expect(placeMarketOrder).toHaveBeenCalledOnce();
+  });
+
+  // ── Slave enable / disable ─────────────────────────────────────────────────
+
+  it('skips copy when slave is disabled via setSlaveEnabled', async () => {
+    await engine.setSlaveEnabled(SLAVE, false);
+    vi.mocked(placeMarketOrder).mockClear();
+
+    await engine.onFill(makeFill());
+
+    expect(placeMarketOrder).not.toHaveBeenCalled();
+  });
+
+  it('flattens open positions when slave is disabled', async () => {
+    vi.mocked(getPositions).mockResolvedValue([
+      { accountId: SLAVE, contractId: 'ESM4', netPos: 2 },
+    ]);
+
+    await engine.setSlaveEnabled(SLAVE, false);
+
+    expect(getPositions).toHaveBeenCalledWith(SLAVE);
+    expect(placeMarketOrder).toHaveBeenCalledWith({
+      accountId: SLAVE, symbol: 'ESM4', action: 'Sell', orderQty: 2,
+    });
+  });
+
+  it('does not place orders when slave has no open positions on disable', async () => {
+    vi.mocked(getPositions).mockResolvedValue([]);
+
+    await engine.setSlaveEnabled(SLAVE, false);
+
+    expect(placeMarketOrder).not.toHaveBeenCalled();
+  });
+
+  it('copies again after re-enabling a disabled slave', async () => {
+    await engine.setSlaveEnabled(SLAVE, false);
+    await engine.setSlaveEnabled(SLAVE, true);
+    vi.mocked(placeMarketOrder).mockClear();
+
+    await engine.onFill(makeFill());
+
+    expect(placeMarketOrder).toHaveBeenCalledOnce();
+  });
+
+  // ── Dynamic master ─────────────────────────────────────────────────────────
+
+  it('routes fills from the new master after setMaster', async () => {
+    engine.setMaster(SLAVE); // SLAVE (2) is now master
+
+    // A fill from account 2 should now be treated as master fill
+    await engine.onFill(makeFill({ accountId: SLAVE, orderId: 99 }));
+
+    // Account 1 (old master) is now a slave — should receive the copy
+    expect(placeMarketOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: MASTER }),
+    );
   });
 
   it('sends critical alert after max retries with slave still open', async () => {

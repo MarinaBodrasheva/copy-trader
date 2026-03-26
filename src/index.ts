@@ -38,9 +38,8 @@ async function main(): Promise<void> {
     await dailyLossGuard.initialize();
   }
 
-  startDashboard(config.webPort, dailyLossGuard);
-
   const copyEngine = new CopyEngine(positionTracker, dailyLossGuard);
+  startDashboard(config.webPort, copyEngine, dailyLossGuard);
   const socket     = new TradovateSocket(
     fill   => copyEngine.onFill(fill),
     update => {
